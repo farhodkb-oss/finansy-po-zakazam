@@ -1,10 +1,10 @@
 /* Сервис-воркер, совместимый с localhost, GitHub Pages /repo/ и собственным доменом. */
 const BASE = self.registration.scope;
 const CACHE_PREFIX = 'finance-drive-ui-';
-const CACHE = CACHE_PREFIX + 'pages-v3-reconnect-' + new URL(BASE).pathname;
+const CACHE = CACHE_PREFIX + 'pages-v4-reconnect-network-' + new URL(BASE).pathname;
 const ASSETS = [
-  './', './index.html', './assets/styles.css', './assets/app.js',
-  './assets/drive_api.js', './assets/drive_journal.js',
+  './', './index.html', './assets/styles.css', './assets/app.js?v=reconnect-20261013-2',
+  './assets/drive_api.js?v=reconnect-20261013-2', './assets/drive_journal.js',
   './assets/google_config.js', './assets/icons/icon-192.png',
   './assets/icons/icon-512.png', './manifest.webmanifest'
 ].map(path => new URL(path, BASE).href);
@@ -43,15 +43,27 @@ self.addEventListener('fetch', event => {
     );
     return;
   }
-  event.respondWith(
-    caches.match(request).then(cached => cached ||
+  // JavaScript and CSS are network-first: updates do not get stuck in offline cache.
+  // When disconnected we continue to serve the last successfully cached version.
+  if (/\.(js|css)$/.test(url.pathname)) {
+    event.respondWith(
       fetch(request).then(response => {
         if (response.ok && response.type === 'basic') {
           const copy = response.clone();
-          caches.open(CACHE).then(cache => cache.put(request, copy));
+          event.waitUntil(caches.open(CACHE).then(cache => cache.put(request, copy)));
         }
         return response;
-      })
-    )
+      }).catch(async () => (await caches.match(request)) || Response.error())
+    );
+    return;
+  }
+  event.respondWith(
+    caches.match(request).then(cached => cached || fetch(request).then(response => {
+      if (response.ok && response.type === 'basic') {
+        const copy = response.clone();
+        event.waitUntil(caches.open(CACHE).then(cache => cache.put(request, copy)));
+      }
+      return response;
+    }))
   );
 });
