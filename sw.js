@@ -1,7 +1,7 @@
 /* Сервис-воркер, совместимый с localhost, GitHub Pages /repo/ и собственным доменом. */
 const BASE = self.registration.scope;
 const CACHE_PREFIX = 'finance-drive-ui-';
-const CACHE = CACHE_PREFIX + 'pages-v2-' + new URL(BASE).pathname;
+const CACHE = CACHE_PREFIX + 'pages-v3-reconnect-' + new URL(BASE).pathname;
 const ASSETS = [
   './', './index.html', './assets/styles.css', './assets/app.js',
   './assets/drive_api.js', './assets/drive_journal.js',
