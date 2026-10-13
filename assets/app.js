@@ -18,7 +18,7 @@ const today=()=>{const t=new Date();return `${t.getFullYear()}-${String(t.getMon
 const day=iso=>iso?iso.split('-').reverse().join('.'):'—';
 const firstMonth=()=>today().slice(0,7)+'-01';
 const dirtyDate=iso=>iso&&/^\d{4}-\d\d-\d\d$/.test(iso)?iso:'—';
-let db;let bulkMode=false;let driveFolderId=null;let remoteHeads=new Map();let cloudConflicts=[];
+let db;let bulkMode=false;let wasActivated=false;let lastAuthConnected=false;let driveFolderId=null;let remoteHeads=new Map();let cloudConflicts=[];
 const state={driveStatus:'Google Диск не подключён',page:'home',rows:[],refs:[],orders:[],ops:[],queue:[],session:false,connection:navigator.onLine?'online':'offline',busy:false,refGroup:'income',from:firstMonth(),to:today(),orderSearch:'',opSearch:'',orderFilter:'all',sort:{orders:['order_no',true],operations:['date',false],reports:['order_no',true],references:['name',true]},print:false};
 
 async function openDB(){
@@ -66,13 +66,13 @@ function table(headers,tbody,empty='Записей пока нет'){
  return `<div class="scroll-table"><table><thead><tr>${headers}</tr></thead><tbody>${tbody}</tbody></table></div>${tbody?'':`<div class="empty"><b>${e(empty)}</b>Добавьте первую запись или измените фильтры.</div>`}`;
 }
 function orderName(id){return id?state.orders.find(o=>o.id===id)?.order_no||'Удалённый заказ':'Общие';}
-function infoBadge(){const n=state.queue.length;const issue=state.queue.some(x=>x.issue)||cloudConflicts.length>0;const cl=issue?'problem':(!navigator.onLine?'offline':n?'offline':'');
- const text=issue?`Требуется проверка (${n+cloudConflicts.length})`:!navigator.onLine?'Нет интернета':n?`Ожидает отправки: ${n}`:state.busy?'Синхронизация…':DriveApi.connected()?'Синхронизировано':'Google Диск не подключён';
+function infoBadge(){const n=state.queue.length;const issue=state.queue.some(x=>x.issue)||cloudConflicts.length>0;const cl=issue?'problem':(!navigator.onLine||n||!DriveApi.connected())?'offline':'';
+ const text=issue?`Требуется проверка (${n+cloudConflicts.length})`:!navigator.onLine?'Офлайн':state.busy?'Синхронизация…':n?`Ожидает отправки: ${n}`:DriveApi.connected()?'Синхронизировано':'Google Диск не подключён';
  return `<span class="pill ${cl}"><span class="dot"></span>${e(text)}</span>`;
 }
 function shell(contents){const p=PAGES.find(x=>x[0]===state.page);
  return `<div class="layout"><aside class="sidebar"><div class="brand"><div class="brand-logo">↗</div><div><b>Финансы<br>по заказам</b><small>ONLINE / OFFLINE</small></div></div><nav class="nav">${PAGES.map(([id,label,ico])=>`<button data-page="${id}" class="${state.page===id?'active':''}"><span class="ico">${navIcon(id)}</span>${label}</button>`).join('')}</nav><div class="sidebar-footer">Данные сохраняются на устройстве.<br>После подключения — синхронизация.</div></aside>
- <main class="main"><div class="top"><div><div class="eyebrow">УЧЁТ ДЕНЕЖНЫХ СРЕДСТВ</div><h1>${p[1]}</h1></div><div class="top-right">${infoBadge()}<button class="btn ghost no-print" data-action="sync">↻ Обновить</button></div></div>${contents}</main></div>
+ <main class="main"><div class="top"><div><div class="eyebrow">УЧЁТ ДЕНЕЖНЫХ СРЕДСТВ</div><h1>${p[1]}</h1></div><div class="top-right">${infoBadge()}${!DriveApi.connected()&&navigator.onLine?'<button class="btn primary no-print" data-action="connect-google">↗ Подключить Google</button>':'<button class="btn ghost no-print" data-action="sync">↻ Обновить</button>'}</div></div>${contents}</main></div>
  <nav class="bottom-nav">${PAGES.map(([id,label,ico])=>`<button class="${state.page===id?'active':''}" data-page="${id}"><span class="ico">${navIcon(id)}</span>${label}</button>`).join('')}</nav>`;
 }
 function panelsStat(list){return `<div class="cards">${list.map(([icon,title,num,cls,foot])=>`<div class="card"><div class="card-head"><span class="card-ic ${cls==='green'?'inc-bg':cls==='red'?'exp-bg':'neutral-bg'}">${icon}</span>${title}</div><div class="card-value ${cls}">${money(num)} ${title==='Всего заказов'?'':'<small style="font-size:11px;color:var(--muted)">сум</small>'}</div><div class="card-foot">${foot}</div></div>`).join('')}</div>`;}
@@ -125,7 +125,8 @@ function settings(){const pending=state.queue.filter(x=>x.issue);
  <div class="settings-row"><div><b>Резервная копия</b><div class="muted">Сохранить текущие данные и очередь в JSON на устройство.</div></div><button class="btn ghost" data-action="backup">Скачать JSON</button></div>
  <div class="settings-row"><div><b>Перенос старой базы Windows</b><div class="muted">Импорт файла JSON, созданного скриптом export_windows_to_json.py</div></div><button class="btn ghost" data-action="import-json">Импорт JSON</button><input id="import-json-file" type="file" accept=".json,application/json" style="display:none"></div>
  <div class="settings-row"><div><b>Выход</b><div class="muted">Очистить локальные данные только после отправки всех изменений. Облачная база останется на Google Диске.</div></div><button class="btn danger" data-action="logout">Выйти</button></div>
- <div class="settings-row"><div><b>Офлайн-режим</b><div class="muted">Данные сохраняются на этом устройстве даже без интернета. Для повторного подключения после истечения Google-токена нажмите «Подключить Google».</div></div></div></div>
+ <div class="settings-row"><div><b>Офлайн-режим</b><div class="muted">Данные сохраняются на этом устройстве даже без интернета. Токен Google временный: после перезапуска или окончания срока действия нажмите «Подключить Google» на любой странице.</div></div></div>
+ <div class="settings-row"><div><b>Диагностика</b><div class="muted">Скачать техническую информацию об ошибках без заказов, сумм и паролей.</div></div><button class="btn ghost" data-action="diagnostics">Скачать отчёт</button></div></div>
  ${pending.length?`<div class="panel"><div class="panel-head"><h2>Конфликты локальных изменений: ${pending.length}</h2></div><div class="panel-inner">${pending.map(p=>`<div class="notification"><b>${e(p.kind)}</b> — ${e(p.issue?.message||'Запись изменена в облаке')}<div class="mini-actions" style="margin-top:10px"><button class="btn small primary" data-action="keep-local" data-id="${p.op_id}">Оставить моё изменение</button><button class="btn small danger" data-action="use-server" data-id="${p.op_id}">Отменить моё изменение</button></div></div>`).join('')}</div></div>`:''}
  ${cloudConflicts.length?`<div class="panel"><div class="panel-head"><h2>Параллельные изменения: ${cloudConflicts.length}</h2></div><div class="panel-inner">${cloudConflicts.map(c=>`<div class="notification"><b>${e(c.selected.kind)} · ${e(c.record_id)}</b><div class="muted">Несколько версий на Google Диске. Выберите версию, которую нужно сохранить. Обе исходные версии останутся в истории.</div><div class="mini-actions">${c.heads.map((h,i)=>`<button class="btn small secondary" data-action="resolve-cloud" data-id="${e(c.record_id)}" data-head-id="${e(h.event_id)}">Версия ${i+1}: ${e(h.data?.order_no||h.data?.category||h.data?.name||h.at||'изменение')}</button>`).join('')}</div></div>`).join('')}</div></div>`:''}
  <div class="notification">Локальный браузерный кэш не шифруется дополнительно. Пользуйтесь блокировкой экрана и доверенными устройствами. Файлы базы видны в папке «Финансы по заказам - База» на вашем Google Диске.</div>`;
@@ -310,14 +311,14 @@ async function synchronize(){
 }
 async function connectGoogle(){
   // This function must be invoked synchronously from a real click for the popup.
-  const promise=DriveApi.authorize();
+  const promise=DriveApi.authorize({returning:wasActivated});
   await promise;
   try{
     const previous=await meta('drive_folder_id');
     driveFolderId=await DriveApi.getFolder(previous||null);
     await setMeta('drive_folder_id',driveFolderId);
     await setMeta('activated',true);
-    state.session=true;state.driveStatus='Подключён к Google Диску';
+    wasActivated=true;lastAuthConnected=true;state.session=true;state.driveStatus='Подключён к Google Диску';
     await synchronize();await refresh();
     if(state.refs.length===0 && state.orders.length===0 && state.ops.length===0 && (await all('queue')).length===0){
       await seedDefaults();await synchronize();
@@ -354,6 +355,25 @@ async function resolveCloud(recordId,eventId){
  await refresh();render();if(DriveApi.connected())void synchronize();
 }
 function download(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1200);}
+async function diagnostics(){
+ const report=[
+  'Финансы по заказам — диагностический отчёт (без финансовых данных)',
+  'Версия: reconnect-fix-1',
+  'Время: '+new Date().toISOString(),
+  'Подключение устройства: '+(navigator.onLine?'online':'offline'),
+  'Доступ Google: '+(DriveApi.connected()?'есть':'не подключён'),
+  'Состояние синхронизации: '+(state.busy?'в процессе':'ожидание'),
+  'Количество ожидающих операций: '+(await all('queue')).length,
+  'Количество локальных записей: '+(await all('records')).length,
+  'Google-папка ранее подключалась: '+(!!await meta('drive_folder_id')),
+  'Service Worker: '+('serviceWorker' in navigator?'поддерживается':'нет'),
+  'Последняя информация: '+state.driveStatus,
+  'Записей с конфликтами: '+cloudConflicts.length,
+  'Адрес сайта: '+location.origin+location.pathname,
+  'Примечание: Client ID, токены, названия заказов и суммы в отчёт не включены.'
+ ];
+ download(new Blob([report.join('\n')],{type:'text/plain;charset=utf-8'}),'finansy_diagnostika.txt');
+}
 function exportCSV(){const rows=reportRows();const csv=[['Заказ','Заказчик','Приход','Расход','Разница'],...rows.map(r=>[r.order_no,r.customer,r.inc,r.exp,r.difference])].map(line=>line.map(x=>{let val=String(x);if(/^[=+@\-\t\r]/.test(val))val="'"+val;return '"'+val.replaceAll('"','""')+'"';}).join(';')).join('\r\n');download(new Blob(['\ufeff',csv],{type:'text/csv;charset=utf-8'}),'finansy_otchet.csv');}
 async function exportPDF(){state.page='reports';render();window.print();toast('В окне печати выберите «Сохранить как PDF».');}
 
@@ -395,16 +415,29 @@ async function logOut(){
  await transaction(['records','queue','meta','drive_events'],'readwrite',tx=>{
   for(const table of ['records','queue','meta','drive_events'])tx.objectStore(table).clear();
  });
- remoteHeads=new Map();cloudConflicts=[];driveFolderId=null;state.session=false;
+ remoteHeads=new Map();cloudConflicts=[];driveFolderId=null;wasActivated=false;lastAuthConnected=false;state.session=false;
  await refresh();$('app').innerHTML=loginScreen();toast('Локальные данные очищены.');
 }
 async function init(){
  if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
  db=await openDB();await refresh();
- if(await meta('activated')){state.driveStatus='Офлайн-копия доступна · подключите Google Диск';render();}
+ wasActivated=!!await meta('activated');lastAuthConnected=DriveApi.connected();
+ if(wasActivated){state.driveStatus='Офлайн-копия доступна · подключите Google Диск';render();}
  else $('app').innerHTML=loginScreen();
  setInterval(()=>{if(navigator.onLine&&DriveApi.connected()&&document.visibilityState==='visible')void synchronize();},60000);
- window.addEventListener('online',()=>{state.connection='online';if(DriveApi.connected())void synchronize();else render();});
+ // Detect expiry even when the Android PWA was put to sleep and then resumed.
+ // Google requires a user action to request a new browser access token.
+ function updateAuthBadge(){
+  const connected=DriveApi.connected();
+  if(connected!==lastAuthConnected){
+    lastAuthConnected=connected;
+    if(!connected)state.driveStatus='Срок доступа Google истёк. Данные на устройстве сохранены. Нажмите «Подключить Google».';
+    if(!awaitingLogin())render();
+  }
+ }
+ setInterval(updateAuthBadge,15000);
+ document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')updateAuthBadge();});
+ window.addEventListener('online',()=>{state.connection='online';if(DriveApi.connected())void synchronize();else if(!awaitingLogin())render();});
  window.addEventListener('offline',()=>{state.connection='offline';if(!awaitingLogin())render();});
 }
 function awaitingLogin(){return !!document.querySelector('.login-outer')}
@@ -455,7 +488,7 @@ document.addEventListener('click',async ev=>{
  case 'toggle-ref':{const r=state.refs.find(x=>x.id===id);await stage('reference',id,{group_code:r.group_code,name:r.name,is_active:!r.is_active,sort_order:r.sort_order},'upsert');break;}
  case 'keep-local':await resolveIssue(id,'local');break;case 'use-server':await resolveIssue(id,'server');break;
  case 'range-all':state.from='';state.to='';render();break;
- case 'backup':await backup();break;case 'logout':await logOut();break;
+ case 'backup':await backup();break;case 'diagnostics':await diagnostics();break;case 'logout':await logOut();break;
  case 'csv':exportCSV();break;case 'pdf':await exportPDF();break;case 'print':window.print();break;
  }
  }catch(err){toast('Ошибка: '+err.message);}

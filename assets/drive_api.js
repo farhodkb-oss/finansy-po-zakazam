@@ -6,7 +6,7 @@ const DriveApi = (()=>{
   const UPLOAD='https://www.googleapis.com/upload/drive/v3/files';
   const SCOPES='https://www.googleapis.com/auth/drive.file';
   const FOLDER='Финансы по заказам - База';
-  let token='',expires=0,client=null;
+  let token='',expires=0,authorizing=false;
   async function request(url,options={}) {
     if(!token || Date.now()>expires-45000) throw Error('Нужно снова подключить Google Диск.');
     const res=await fetch(url,{...options,headers:{...options.headers,Authorization:'Bearer '+token}});
@@ -16,17 +16,40 @@ const DriveApi = (()=>{
     return res;
   }
   function connected(){return !!token&&Date.now()<expires-45000;}
-  function authorize() {
+  // Each authorization attempt needs a fresh callback and its own Promise.
+  // The former cached client kept resolve/reject from the *first* attempt,
+  // causing subsequent Google reconnects to hang indefinitely.
+  function authorize({returning=false}={}) {
     const clientId=window.FINANCE_GOOGLE_CLIENT_ID||'';
+    if(!navigator.onLine) throw Error('Нет интернета. Локальные данные доступны; подключитесь позже.');
+    if(authorizing) throw Error('Окно подключения уже открывается. Дождитесь ответа Google.');
     if(!clientId || !clientId.includes('.apps.googleusercontent.com')) throw Error('Сначала заполните google_config.js: OAuth Client ID.');
-    if(!window.google?.accounts?.oauth2) throw Error('Модуль Google не загружен. Проверьте интернет и настройку браузера.');
-    // Called directly from user click; popup initiation must happen as user gesture.
+    if(!window.google?.accounts?.oauth2) throw Error('Модуль Google не загрузился. Проверьте интернет и попробуйте ещё раз.');
+    // Start the popup synchronously while handling a real user click.
+    // A fresh client prevents stale callbacks when reauthorizing after expiry.
     return new Promise((resolve,reject)=>{
-      if(!client) client=google.accounts.oauth2.initTokenClient({client_id:clientId,scope:SCOPES,
-        callback:r=>{if(r.error){reject(Error(r.error));return;}
-          token=r.access_token;expires=Date.now()+(Number(r.expires_in)||3000)*1000;resolve(true);},
-        error_callback:r=>reject(Error(r.type||'Авторизация Google прервана'))});
-      client.requestAccessToken({prompt:'select_account'});
+      authorizing=true;
+      let done=false;
+      const finish=(error,result)=>{
+        if(done)return;
+        done=true;authorizing=false;
+        if(error)reject(error);else resolve(result);
+      };
+      try{
+        const oauth=google.accounts.oauth2.initTokenClient({
+          client_id:clientId,scope:SCOPES,
+          callback:r=>{
+            if(r.error || !r.access_token){finish(Error(r.error_description||r.error||'Google не выдал доступ.'));return;}
+            token=r.access_token;
+            expires=Date.now()+(Number(r.expires_in)||3000)*1000;
+            finish(null,true);
+          },
+          error_callback:r=>finish(Error(r.type==='popup_closed'?'Окно Google закрыто. Нажмите «Подключить» ещё раз.':r.type||'Авторизация Google прервана'))
+        });
+        // Returning users need not re-select the account every single time.
+        // The existing Drive folder ID still guards against a wrong account.
+        oauth.requestAccessToken({prompt:returning?'':'select_account'});
+      }catch(err){finish(err);}
     });
   }
   async function list(q,fields='nextPageToken,files(id,name,createdTime)',pageSize=1000){
@@ -67,6 +90,6 @@ const DriveApi = (()=>{
   async function listEvents(folderId){return list(`'${folderId}' in parents and name contains 'event_' and trashed = false`);}
   async function readEvent(fileId){return (await request(`${BASE}/${encodeURIComponent(fileId)}?alt=media`)).json();}
   async function uploadEvent(folderId,event){return create('event_'+event.event_id+'.json',folderId,event);}
-  function disconnect(){token='';expires=0;client=null;}
+  function disconnect(){token='';expires=0;}
   return {authorize,connected,disconnect,getFolder,listEvents,readEvent,uploadEvent};
 })();
